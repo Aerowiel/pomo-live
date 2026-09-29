@@ -1,0 +1,8 @@
+{
+  "name": "pomo-live",
+  "short_name": "pomo-live",
+  "display": "standalone",
+  "background_color": "#f0dfd2",
+  "theme_color": "#552f37",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
