@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatCode, normalizeCode } from '../public/codes.js';
-import { createStore, hashSecret, parsePinned } from '../lib/rooms.js';
+import { createStore, hashSecret, MAX_NAME, parsePinned } from '../lib/rooms.js';
 import { createRateLimiter } from '../lib/rate-limit.js';
 
 const MIN = 60_000;
@@ -92,6 +92,27 @@ test('absurd restored sessions are rejected', () => {
   const future = { focusMin: 25, rounds: 2, startedAt: now.t + DAY, pausedAt: null, pausedMs: 0 };
   assert.throws(() => store.restore('K7F2QM', SECRET, future), { code: 'invalid' });
   assert.throws(() => store.restore('K7F2QM', SECRET, 'nope'), { code: 'invalid' });
+});
+
+test('the creator names the room with plain, one-line, bounded text', () => {
+  const store = createStore({ now: clock() });
+  const { code, secret } = store.create();
+  store.command(code, secret, { action: 'rename', name: '  Florian\n  <b>desk</b>\u0007 ' });
+  assert.equal(store.get(code).name, 'Florian <b>desk</b>');
+  store.command(code, secret, { action: 'rename', name: 'x'.repeat(40) });
+  assert.equal(store.get(code).name.length, MAX_NAME);
+  assert.throws(() => store.command(code, secret, { action: 'rename', name: 42 }), { code: 'invalid' });
+  assert.throws(() => store.command(code, 'wrong', { action: 'rename', name: 'hijack' }), { code: 'forbidden' });
+});
+
+test('a restore brings the name back without overriding an existing one', () => {
+  const store = createStore({ pinned: [{ code: 'K7F2QM', hash: hashSecret(SECRET) }], now: clock() });
+  const seen = [];
+  store.subscribe('K7F2QM', (room) => seen.push(room.name));
+  store.restore('K7F2QM', SECRET, null, 'Florian');
+  store.restore('K7F2QM', SECRET, null, 'Other');
+  assert.equal(store.get('K7F2QM').name, 'Florian');
+  assert.deepEqual(seen, ['Florian', 'Florian']);
 });
 
 test('pinned rooms are read from the environment', () => {

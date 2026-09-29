@@ -40,7 +40,8 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-const roomState = (room) => ({ session: room.session, serverNow: Date.now() });
+const MAX_WATCHED = 20;
+const roomState = (room) => ({ name: room.name, session: room.session, serverNow: Date.now() });
 const clientIp = (req) => req.headers['fly-client-ip'] ?? req.socket.remoteAddress ?? 'unknown';
 const bearer = (req) => /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
 
@@ -61,12 +62,7 @@ async function readJson(req) {
 
 // Server-Sent Events: the current state on connect, then every change, with a heartbeat for the proxy.
 function events(res, code) {
-  res.writeHead(200, {
-    ...SECURITY_HEADERS,
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-store',
-    'X-Accel-Buffering': 'no',
-  });
+  const heartbeat = openStream(res);
   const send = (room) => {
     if (!room) {
       res.end('retry: 10000\nevent: missing\ndata: {}\n\n');
@@ -75,15 +71,41 @@ function events(res, code) {
     res.write(`event: state\ndata: ${JSON.stringify(roomState(room))}\n\n`);
     return true;
   };
-  res.write('retry: 3000\n\n');
-  if (!send(store.get(code))) return;
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
+  if (!send(store.get(code))) return clearInterval(heartbeat);
   const unsubscribe = store.subscribe(code, (room) => send(room) || stop());
   function stop() {
     clearInterval(heartbeat);
     unsubscribe();
   }
   res.on('close', stop);
+}
+
+function openStream(res) {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  return setInterval(() => res.write(': ping\n\n'), 25_000);
+}
+
+// Unlike /events, a missing room does not end the stream: it may come back once its editor restores it.
+function watch(res, codes) {
+  const heartbeat = openStream(res);
+  const send = (code, room) => {
+    const data = room ? { code, ...roomState(room) } : { code, missing: true, serverNow: Date.now() };
+    res.write(`event: room\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const unsubscribes = codes.map((code) => {
+    send(code, store.get(code));
+    return store.subscribe(code, (room) => send(code, room));
+  });
+  res.on('close', () => {
+    clearInterval(heartbeat);
+    for (const unsubscribe of unsubscribes) unsubscribe();
+  });
 }
 
 async function serveStatic(res, pathname) {
@@ -103,8 +125,14 @@ async function serveStatic(res, pathname) {
 }
 
 async function handle(req, res) {
-  const { pathname } = new URL(req.url, 'http://localhost');
+  const { pathname, searchParams } = new URL(req.url, 'http://localhost');
   if (pathname === '/healthz') return json(res, 200, { ok: true });
+
+  if (pathname === '/api/watch' && req.method === 'GET') {
+    const codes = [...new Set((searchParams.get('codes') ?? '').split(',').map(normalizeCode).filter(Boolean))];
+    if (codes.length === 0 || codes.length > MAX_WATCHED) return json(res, 400, { error: 'invalid' });
+    return watch(res, codes);
+  }
 
   if (pathname === '/api/rooms' && req.method === 'POST') {
     if (!creations.allow(clientIp(req))) return json(res, 429, { error: 'too_many' });
@@ -122,7 +150,7 @@ async function handle(req, res) {
     if (action === 'command') return json(res, 200, roomState(store.command(code, bearer(req), body)));
     if (action === 'restore') {
       if (!store.get(code) && !restores.allow(clientIp(req))) return json(res, 429, { error: 'too_many' });
-      return json(res, 200, roomState(store.restore(code, bearer(req), body.session)));
+      return json(res, 200, roomState(store.restore(code, bearer(req), body.session, body.name)));
     }
   }
 

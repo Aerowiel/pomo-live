@@ -3,6 +3,8 @@ import { formatCode, normalizeCode } from './codes.js';
 import * as audio from './audio.js';
 
 const app = document.getElementById('app');
+const MAX_NAME = 30;
+const MAX_FOLLOWED = 20;
 
 const saved = {
   get(key, fallback = null) {
@@ -15,6 +17,17 @@ const saved = {
   set: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
   remove: (key) => localStorage.removeItem(key),
 };
+
+function followed() {
+  const list = saved.get('following', []);
+  const legacy = saved.get('lastView');
+  if (legacy) {
+    saved.remove('lastView');
+    if (!list.includes(legacy)) list.unshift(legacy);
+    saved.set('following', list);
+  }
+  return list;
+}
 
 // Offset to the server clock, so that every device derives the same phase from the same events.
 let offset = 0;
@@ -29,6 +42,25 @@ function countdown(ms) {
 const clockTime = (serverMs) =>
   new Date(toLocal(serverMs)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 const fromNow = (ms) => (ms < 60_000 ? 'in less than a minute' : `in ${Math.round(ms / 60_000)} min`);
+const roomLabel = (name, code) => name || formatCode(code);
+
+// What a follower reads about a room, shared by the full-screen viewer and the dashboard cards.
+function describe(session, missing) {
+  const view = derive(session, serverNow());
+  if (missing) return { view: 'missing', status: 'NOT FOUND', next: '', rel: '', meta: '' };
+  if (view.status === 'free') return { view: 'free', status: session === undefined ? '…' : 'FREE', next: '', rel: '', meta: '' };
+  const round = `round ${view.round}/${view.rounds}`;
+  if (view.status === 'paused') return { view: 'paused', status: 'PAUSED', next: `since ${clockTime(view.pausedAt)}`, rel: '', meta: round };
+  const inFocus = view.status === 'focus';
+  const lastFocus = inFocus && view.round === view.rounds;
+  return {
+    view: view.status,
+    status: inFocus ? 'FOCUS' : 'BREAK',
+    next: `${lastFocus ? 'done' : inFocus ? 'break' : 'focus'} at ${clockTime(view.phaseEndsAt)}`,
+    rel: `(${fromNow(view.remaining)})`,
+    meta: `${round} · ends at ${clockTime(view.sessionEndsAt)}`,
+  };
+}
 
 async function post(path, body = {}, secret) {
   const response = await fetch(path, {
@@ -46,9 +78,9 @@ function follow(code, { onState, onMissing }) {
   function open() {
     source = new EventSource(`/api/rooms/${code}/events`);
     source.addEventListener('state', (event) => {
-      const { session, serverNow: at } = JSON.parse(event.data);
-      offset = at - Date.now();
-      onState(session);
+      const data = JSON.parse(event.data);
+      offset = data.serverNow - Date.now();
+      onState(data);
     });
     source.addEventListener('missing', () => {
       source.close();
@@ -62,6 +94,15 @@ function follow(code, { onState, onMissing }) {
       open();
     },
   };
+}
+
+function watchRooms(codes, onRoom) {
+  const source = new EventSource(`/api/watch?codes=${codes.join(',')}`);
+  source.addEventListener('room', (event) => {
+    const data = JSON.parse(event.data);
+    offset = data.serverNow - Date.now();
+    onRoom(data);
+  });
 }
 
 const RING = 2 * Math.PI * 90;
@@ -98,14 +139,17 @@ function setRing(half, fraction) {
 
 function homePage() {
   const editor = saved.get('editor');
-  const lastView = saved.get('lastView');
-  if (!editor && lastView) return location.replace(`#view=${lastView}`);
+  let following = followed();
 
   document.body.dataset.page = 'home';
   app.innerHTML = `
     <div class="home">
       <h1>pomo-live</h1>
       <p class="tagline">A pomodoro others can follow live.</p>
+      <section class="following" id="following" hidden>
+        <h2>Following</h2>
+        <ul class="cards" id="cards"></ul>
+      </section>
       <div class="actions">
         <a class="primary" id="mine" hidden></a>
         <button class="primary" id="create">Start a pomodoro</button>
@@ -118,7 +162,7 @@ function homePage() {
         </div>
       </form>
       <p class="error" id="error" role="alert"></p>
-      <p class="privacy">No account, no name. Each room only keeps its timer state, on a server in Paris (Fly.io), and is deleted after 30 days without a session.</p>
+      <p class="privacy">No account. Each room only keeps its timer state and the name its creator gave it, visible to anyone with the code, on a server in Paris (Fly.io). Rooms are deleted after 30 days without a session.</p>
     </div>`;
 
   const error = app.querySelector('#error');
@@ -127,7 +171,7 @@ function homePage() {
     const mine = app.querySelector('#mine');
     mine.hidden = false;
     mine.href = `#edit=${editor.code}.${editor.secret}`;
-    mine.textContent = `Back to my pomodoro (${formatCode(editor.code)})`;
+    mine.textContent = `Back to my pomodoro (${roomLabel(saved.get(`name:${editor.code}`, ''), editor.code)})`;
     create.textContent = 'Start a new room';
     create.className = 'ghost';
   }
@@ -153,20 +197,74 @@ function homePage() {
     }
     location.hash = `view=${code}`;
   });
+
+  if (following.length === 0) return;
+  const section = app.querySelector('#following');
+  const list = app.querySelector('#cards');
+  section.hidden = false;
+  const rooms = new Map();
+  for (const code of following) {
+    const card = document.createElement('li');
+    card.className = 'card';
+    card.innerHTML = `
+      <a href="#view=${code}">
+        <span class="card-name"></span>
+        <span class="card-status"></span>
+        <span class="card-next"></span>
+      </a>
+      <button class="card-remove" aria-label="Stop following">×</button>`;
+    card.querySelector('.card-remove').addEventListener('click', () => {
+      following = following.filter((c) => c !== code);
+      saved.set('following', following);
+      card.remove();
+      section.hidden = following.length === 0;
+    });
+    list.append(card);
+    rooms.set(code, { card, name: '', session: undefined, missing: false });
+  }
+
+  function render() {
+    for (const [code, room] of rooms) {
+      const text = describe(room.session, room.missing);
+      room.card.dataset.view = text.view;
+      room.card.querySelector('.card-name').textContent = roomLabel(room.name, code);
+      room.card.querySelector('.card-status').textContent = text.status;
+      room.card.querySelector('.card-next').textContent = text.next;
+    }
+  }
+
+  watchRooms(following, (data) => {
+    const room = rooms.get(data.code);
+    if (!room) return;
+    room.missing = Boolean(data.missing);
+    if (!data.missing) {
+      room.name = data.name;
+      room.session = data.session;
+    }
+    render();
+  });
+  render();
+  setInterval(render, 1000);
 }
 
 function editorPage(code, secret) {
   saved.set('editor', { code, secret });
   document.body.dataset.page = 'editor';
   const settings = saved.get('settings', { focusMin: 25, rounds: 4 });
-  let noise = saved.get('noise', false);
+  const storedNoise = saved.get('noise', 'white');
+  let noise = audio.NOISES.includes(storedNoise) || storedNoise === 'off' ? storedNoise : 'white';
   let session = saved.get(`session:${code}`);
+  let name = saved.get(`name:${code}`, '');
   let mode = null;
   let audioKey = '';
 
   app.innerHTML = `
     <div class="editor">
-      <button class="pill share" id="share"></button>
+      <div class="pill share">
+        <input class="room-name" id="roomName" maxlength="${MAX_NAME}" placeholder="name this room" aria-label="Room name" autocomplete="off">
+        <span class="room-code">${formatCode(code)}</span>
+        <button id="copy"><small>copy viewer link</small></button>
+      </div>
       <div class="pill center" id="center"></div>
       <section class="split">
         <div class="half" id="focusHalf"><h2>FOCUS</h2>${ring(WORK_ICON)}<div class="time" id="focusTime"></div></div>
@@ -189,31 +287,37 @@ function editorPage(code, secret) {
   const focusHalf = $('#focusHalf');
   const breakHalf = $('#breakHalf');
   const noiseButton = $('#noise');
+  const nameInput = $('#roomName');
   const problem = $('#problem');
   const say = (message) => {
     problem.textContent = message;
     problem.hidden = !message;
   };
 
-  function setSession(next) {
-    session = next;
-    saved.set(`session:${code}`, next);
+  function setState(data) {
+    session = data.session;
+    saved.set(`session:${code}`, session);
+    if (typeof data.name === 'string') {
+      name = data.name;
+      saved.set(`name:${code}`, name);
+      if (document.activeElement !== nameInput) nameInput.value = name;
+    }
     update();
   }
 
   function send(action, extra = {}) {
     return post(`/api/rooms/${code}/command`, { action, ...extra }, secret)
-      .then(({ session: next, serverNow: at }) => {
-        offset = at - Date.now();
+      .then((data) => {
+        offset = data.serverNow - Date.now();
         say('');
-        setSession(next);
+        setState(data);
       })
       .catch(() => say('Could not reach the server. Try again.'));
   }
 
   async function restore() {
     try {
-      await post(`/api/rooms/${code}/restore`, { session }, secret);
+      await post(`/api/rooms/${code}/restore`, { session, name }, secret);
       say('');
       connection.reopen();
     } catch (e) {
@@ -223,12 +327,15 @@ function editorPage(code, secret) {
     }
   }
 
-  const connection = follow(code, { onState: setSession, onMissing: restore });
+  const connection = follow(code, { onState: setState, onMissing: restore });
 
-  const share = $('#share');
-  share.innerHTML = `${formatCode(code)} <small>copy viewer link</small>`;
-  share.addEventListener('click', async () => {
-    const hint = share.querySelector('small');
+  nameInput.value = name;
+  nameInput.addEventListener('keydown', (event) => event.key === 'Enter' && nameInput.blur());
+  nameInput.addEventListener('change', () => send('rename', { name: nameInput.value }));
+
+  const copy = $('#copy');
+  copy.addEventListener('click', async () => {
+    const hint = copy.querySelector('small');
     await navigator.clipboard.writeText(`${location.origin}/#view=${code}`);
     hint.textContent = 'copied!';
     setTimeout(() => (hint.textContent = 'copy viewer link'), 2000);
@@ -238,7 +345,8 @@ function editorPage(code, secret) {
     if (mode === 'run' && !audio.ready()) {
       await audio.ensure().catch(() => {});
     } else {
-      noise = !noise;
+      const cycle = [...audio.NOISES, 'off'];
+      noise = cycle[(cycle.indexOf(noise) + 1) % cycle.length];
       saved.set('noise', noise);
     }
     update();
@@ -298,7 +406,7 @@ function editorPage(code, secret) {
       start: toLocal(base + phase.start),
       end: toLocal(base + phase.end),
     }));
-    audio.schedule(plan, { noise });
+    audio.schedule(plan, { noise: noise === 'off' ? null : noise });
   }
 
   function update() {
@@ -327,7 +435,7 @@ function editorPage(code, secret) {
       $('#overlay').hidden = view.status !== 'paused';
       document.title = `${countdown(view.remaining)} ${inFocus ? 'focus' : 'break'} · pomo-live`;
     }
-    noiseButton.textContent = mode === 'run' && !audio.ready() ? 'tap to enable sound' : `white noise: ${noise ? 'on' : 'off'}`;
+    noiseButton.textContent = mode === 'run' && !audio.ready() ? 'tap to enable sound' : `noise: ${noise}`;
     syncAudio(view);
   }
 
@@ -342,23 +450,26 @@ function editorPage(code, secret) {
 }
 
 function viewerPage(code) {
-  saved.set('lastView', code);
+  const following = followed();
+  if (!following.includes(code)) saved.set('following', [code, ...following].slice(0, MAX_FOLLOWED));
   document.body.dataset.page = 'viewer';
   app.innerHTML = `
     <div class="viewer">
-      <a class="leave" id="leave" href="#">follow another code</a>
+      <a class="leave" href="#">all rooms</a>
+      <div class="room" id="room"></div>
       <div class="status" id="status"></div>
       <div class="next" id="next"></div>
       <div class="in" id="in"></div>
       <div class="meta" id="meta"></div>
     </div>`;
-  app.querySelector('#leave').addEventListener('click', () => saved.remove('lastView'));
 
   let session;
+  let name = '';
   let missing = false;
   const connection = follow(code, {
-    onState(next) {
-      session = next;
+    onState(data) {
+      session = data.session;
+      name = data.name;
       missing = false;
       update();
     },
@@ -369,34 +480,18 @@ function viewerPage(code) {
     },
   });
 
-  const texts = (values) => {
-    for (const [id, text] of Object.entries(values)) app.querySelector(`#${id}`).textContent = text;
-  };
-
   function update() {
-    const view = derive(session, serverNow());
-    if (missing) {
-      document.body.dataset.view = 'missing';
-      return texts({ status: 'NOT FOUND', next: `No pomodoro with code ${formatCode(code)} right now.`, in: 'Retrying…', meta: '' });
-    }
-    if (view.status === 'free') {
-      document.body.dataset.view = 'free';
-      return texts({ status: session === undefined ? '…' : 'FREE', next: '', in: '', meta: '' });
-    }
-    const round = `round ${view.round}/${view.rounds}`;
-    if (view.status === 'paused') {
-      document.body.dataset.view = 'paused';
-      return texts({ status: 'PAUSED', next: `since ${clockTime(view.pausedAt)}`, in: '', meta: round });
-    }
-    const inFocus = view.status === 'focus';
-    const lastFocus = inFocus && view.round === view.rounds;
-    document.body.dataset.view = view.status;
-    texts({
-      status: inFocus ? 'FOCUS' : 'BREAK',
-      next: `${lastFocus ? 'done' : inFocus ? 'break' : 'focus'} at ${clockTime(view.phaseEndsAt)}`,
-      in: `(${fromNow(view.remaining)})`,
-      meta: `${round} · ends at ${clockTime(view.sessionEndsAt)}`,
-    });
+    const text = describe(session, missing);
+    document.body.dataset.view = text.view;
+    document.title = `${roomLabel(name, code)} · pomo-live`;
+    const values = {
+      room: roomLabel(name, code),
+      status: text.status,
+      next: missing ? `No pomodoro with code ${formatCode(code)} right now.` : text.next,
+      in: missing ? 'Retrying…' : text.rel,
+      meta: text.meta,
+    };
+    for (const [id, value] of Object.entries(values)) app.querySelector(`#${id}`).textContent = value;
   }
 
   update();

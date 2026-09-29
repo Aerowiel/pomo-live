@@ -1,31 +1,58 @@
 // Sounds are generated in the browser and scheduled on the audio clock,
 // so countdowns stay on time even when the tab is in the background.
-const NOISE_LEVEL = 0.05;
+export const NOISES = ['white', 'pink', 'brown'];
+const LEVELS = { white: 0.1, pink: 0.18, brown: 0.3 };
 let ctx = null;
 let noiseGain = null;
+let noiseSource = null;
+let noiseType = null;
 let pending = [];
 
 export async function ensure() {
   if (!ctx) {
     ctx = new AudioContext();
-    startNoise();
+    noiseGain = ctx.createGain();
+    noiseGain.gain.value = 0;
+    noiseGain.connect(ctx.destination);
   }
   if (ctx.state !== 'running') await ctx.resume();
 }
 
 export const ready = () => ctx?.state === 'running';
 
-function startNoise() {
-  const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+function noiseBuffer(type) {
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
   const samples = buffer.getChannelData(0);
-  for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
-  noiseGain = ctx.createGain();
-  noiseGain.gain.value = 0;
-  source.connect(noiseGain).connect(ctx.destination);
-  source.start();
+  let b0 = 0, b1 = 0, b2 = 0, last = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const white = Math.random() * 2 - 1;
+    if (type === 'white') {
+      samples[i] = white;
+    } else if (type === 'pink') {
+      b0 = 0.99765 * b0 + white * 0.099;
+      b1 = 0.963 * b1 + white * 0.2965;
+      b2 = 0.57 * b2 + white * 1.0526;
+      samples[i] = (b0 + b1 + b2 + white * 0.1848) * 0.2;
+    } else {
+      last = (last + 0.02 * white) / 1.02;
+      samples[i] = last * 3.5;
+    }
+  }
+  return buffer;
+}
+
+function useNoise(type) {
+  if (type === noiseType) return;
+  noiseSource?.stop();
+  noiseSource?.disconnect();
+  noiseSource = null;
+  noiseType = type;
+  if (!type) return;
+  noiseSource = ctx.createBufferSource();
+  noiseSource.buffer = noiseBuffer(type);
+  noiseSource.loop = true;
+  noiseSource.connect(noiseGain);
+  noiseSource.start();
 }
 
 function tone(at, frequency, duration, volume = 0.2) {
@@ -55,15 +82,17 @@ export function silence() {
 }
 
 // plan: the session phases with start/end in local milliseconds (Date.now() clock).
+// noise: one of NOISES, or null for silence during focus.
 export function schedule(plan, { noise }) {
   silence();
+  useNoise(noise);
   const nowMs = Date.now();
   const base = ctx.currentTime;
   const at = (ms) => base + (ms - nowMs) / 1000;
   plan.forEach((phase, index) => {
     if (phase.end <= nowMs) return;
     if (noise && phase.kind === 'focus') {
-      noiseGain.gain.setValueAtTime(NOISE_LEVEL, Math.max(base, at(phase.start)));
+      noiseGain.gain.setValueAtTime(LEVELS[noise], Math.max(base, at(phase.start)));
       noiseGain.gain.setValueAtTime(0, at(phase.end));
     }
     for (let second = 5; second >= 1; second--) {
