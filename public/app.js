@@ -1,5 +1,5 @@
 import { breakMinutes, derive, phases, MAX_FOCUS, MAX_ROUNDS, MIN_FOCUS } from './timeline.js';
-import { formatCode, normalizeCode } from './codes.js';
+import { MAX_CODE, normalizeCode } from './codes.js';
 import * as audio from './audio.js';
 
 const app = document.getElementById('app');
@@ -18,15 +18,28 @@ const saved = {
   remove: (key) => localStorage.removeItem(key),
 };
 
+// Rooms moved to a new code: followers are carried over, editors of the old code are forgotten.
+const RENAMED = { k93edv: 'fpendaries' };
+const current = (code) => {
+  const normalized = normalizeCode(code);
+  return normalized && (RENAMED[normalized] ?? normalized);
+};
+
 function followed() {
-  const list = saved.get('following', []);
   const legacy = saved.get('lastView');
-  if (legacy) {
-    saved.remove('lastView');
-    if (!list.includes(legacy)) list.unshift(legacy);
-    saved.set('following', list);
-  }
+  saved.remove('lastView');
+  const list = [...new Set([legacy, ...saved.get('following', [])].map(current).filter(Boolean))];
+  saved.set('following', list);
   return list;
+}
+
+function savedEditor() {
+  const editor = saved.get('editor');
+  if (editor && RENAMED[normalizeCode(editor.code)]) {
+    saved.remove('editor');
+    return null;
+  }
+  return editor;
 }
 
 // Offset to the server clock, so that every device derives the same phase from the same events.
@@ -42,7 +55,8 @@ function countdown(ms) {
 const clockTime = (serverMs) =>
   new Date(toLocal(serverMs)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 const fromNow = (ms) => (ms < 60_000 ? 'in less than a minute' : `in ${Math.round(ms / 60_000)} min`);
-const roomLabel = (name, code) => name || formatCode(code);
+const roomLabel = (name, code) => name || code;
+const editLink = (code, secret) => `/edit/${code}#${secret}`;
 
 // What a follower reads about a room, shared by the full-screen viewer and the dashboard cards.
 function describe(session, missing) {
@@ -69,7 +83,7 @@ async function post(path, body = {}, secret) {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(data.error ?? response.statusText), { status: response.status, code: data.error });
+  if (!response.ok) throw Object.assign(new Error(data.error ?? response.statusText), { status: response.status, code: data.error, suggestion: data.suggestion });
   return data;
 }
 
@@ -138,8 +152,9 @@ function setRing(half, fraction) {
 }
 
 function homePage() {
-  const editor = saved.get('editor');
+  const editor = savedEditor();
   let following = followed();
+  const codeRule = `3 to ${MAX_CODE} characters: letters, digits and hyphens.`;
 
   document.body.dataset.page = 'home';
   app.innerHTML = `
@@ -150,14 +165,19 @@ function homePage() {
         <h2>Following</h2>
         <ul class="cards" id="cards"></ul>
       </section>
-      <div class="actions">
-        <a class="primary" id="mine" hidden></a>
-        <button class="primary" id="create">Start a pomodoro</button>
-      </div>
+      <a class="primary" id="mine" hidden></a>
+      <form class="join" id="create">
+        <label for="newCode" id="createLabel">Start a pomodoro</label>
+        <div>
+          <input id="newCode" placeholder="your code (optional)" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="${MAX_CODE}">
+          <button class="primary">Create</button>
+        </div>
+        <p class="hint" id="suggestion" hidden></p>
+      </form>
       <form class="join" id="join">
         <label for="code">Follow someone's pomodoro</label>
         <div>
-          <input id="code" placeholder="K7F-2QM" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="7">
+          <input id="code" placeholder="their code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="${MAX_CODE}">
           <button class="primary">Watch</button>
         </div>
       </form>
@@ -166,22 +186,44 @@ function homePage() {
     </div>`;
 
   const error = app.querySelector('#error');
-  const create = app.querySelector('#create');
+  const newCode = app.querySelector('#newCode');
+  const suggestion = app.querySelector('#suggestion');
   if (editor) {
     const mine = app.querySelector('#mine');
     mine.hidden = false;
-    mine.href = `#edit=${editor.code}.${editor.secret}`;
+    mine.href = editLink(editor.code, editor.secret);
     mine.textContent = `Back to my pomodoro (${roomLabel(saved.get(`name:${editor.code}`, ''), editor.code)})`;
-    create.textContent = 'Start a new room';
-    create.className = 'ghost';
+    app.querySelector('#createLabel').textContent = 'Start a new room';
   }
 
-  create.addEventListener('click', async () => {
-    if (editor && !confirm(`This device will forget your room ${formatCode(editor.code)} (keep its link if you need it). Continue?`)) return;
+  app.querySelector('#create').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.textContent = '';
+    suggestion.hidden = true;
+    const wanted = newCode.value.trim();
+    if (wanted && !normalizeCode(wanted)) {
+      error.textContent = `A code is ${codeRule}`;
+      return;
+    }
+    if (editor && !confirm(`This device will forget your room ${editor.code} (keep its link if you need it). Continue?`)) return;
     try {
-      const { code, secret } = await post('/api/rooms');
-      location.hash = `edit=${code}.${secret}`;
+      const { code, secret } = await post('/api/rooms', wanted ? { code: wanted } : {});
+      location.assign(editLink(code, secret));
     } catch (e) {
+      if (e.code === 'taken' && e.suggestion) {
+        suggestion.hidden = false;
+        suggestion.textContent = `“${normalizeCode(wanted)}” is taken. `;
+        const accept = document.createElement('button');
+        accept.type = 'button';
+        accept.className = 'ghost';
+        accept.textContent = `Use ${e.suggestion}`;
+        accept.addEventListener('click', () => {
+          newCode.value = e.suggestion;
+          suggestion.hidden = true;
+        });
+        suggestion.append(accept);
+        return;
+      }
       error.textContent = e.status === 429
         ? 'Too many new rooms from your network. Try again in an hour.'
         : 'Could not create a room right now. Try again later.';
@@ -190,12 +232,12 @@ function homePage() {
 
   app.querySelector('#join').addEventListener('submit', (event) => {
     event.preventDefault();
-    const code = normalizeCode(app.querySelector('#code').value);
+    const code = current(app.querySelector('#code').value);
     if (!code) {
-      error.textContent = 'A code looks like K7F-2QM.';
+      error.textContent = `A code is ${codeRule}`;
       return;
     }
-    location.hash = `view=${code}`;
+    location.assign(`/view/${code}`);
   });
 
   if (following.length === 0) return;
@@ -207,7 +249,7 @@ function homePage() {
     const card = document.createElement('li');
     card.className = 'card';
     card.innerHTML = `
-      <a href="#view=${code}">
+      <a href="/view/${code}">
         <span class="card-name"></span>
         <span class="card-status"></span>
         <span class="card-next"></span>
@@ -251,8 +293,8 @@ function editorPage(code, secret) {
   saved.set('editor', { code, secret });
   document.body.dataset.page = 'editor';
   const settings = saved.get('settings', { focusMin: 25, rounds: 4 });
-  const storedNoise = saved.get('noise', 'white');
-  let noise = audio.NOISES.includes(storedNoise) || storedNoise === 'off' ? storedNoise : 'white';
+  const storedNoise = saved.get('noise', 'brown');
+  let noise = audio.NOISES.includes(storedNoise) || storedNoise === 'off' ? storedNoise : 'brown';
   let session = saved.get(`session:${code}`);
   let name = saved.get(`name:${code}`, '');
   let mode = null;
@@ -262,7 +304,7 @@ function editorPage(code, secret) {
     <div class="editor">
       <div class="pill share">
         <input class="room-name" id="roomName" maxlength="${MAX_NAME}" placeholder="name this room" aria-label="Room name" autocomplete="off">
-        <span class="room-code">${formatCode(code)}</span>
+        <span class="room-code">${code}</span>
         <button id="copy"><small>copy viewer link</small></button>
       </div>
       <div class="pill center" id="center"></div>
@@ -336,7 +378,7 @@ function editorPage(code, secret) {
   const copy = $('#copy');
   copy.addEventListener('click', async () => {
     const hint = copy.querySelector('small');
-    await navigator.clipboard.writeText(`${location.origin}/#view=${code}`);
+    await navigator.clipboard.writeText(`${location.origin}/view/${code}`);
     hint.textContent = 'copied!';
     setTimeout(() => (hint.textContent = 'copy viewer link'), 2000);
   });
@@ -455,7 +497,7 @@ function viewerPage(code) {
   document.body.dataset.page = 'viewer';
   app.innerHTML = `
     <div class="viewer">
-      <a class="leave" href="#">all rooms</a>
+      <a class="leave" href="/">all rooms</a>
       <div class="room" id="room"></div>
       <div class="status" id="status"></div>
       <div class="next" id="next"></div>
@@ -487,7 +529,7 @@ function viewerPage(code) {
     const values = {
       room: roomLabel(name, code),
       status: text.status,
-      next: missing ? `No pomodoro with code ${formatCode(code)} right now.` : text.next,
+      next: missing ? `No pomodoro with code ${code} right now.` : text.next,
       in: missing ? 'Retrying…' : text.rel,
       meta: text.meta,
     };
@@ -498,18 +540,24 @@ function viewerPage(code) {
   setInterval(update, 1000);
 }
 
+// The editor secret stays after the #, so it never reaches the server or its logs.
 function route() {
-  const params = new URLSearchParams(location.hash.slice(1));
-  const edit = params.get('edit');
-  if (edit) {
-    const [rawCode, secret] = edit.split('.');
-    const code = normalizeCode(rawCode);
-    if (code && secret) return editorPage(code, secret);
+  const legacy = new URLSearchParams(location.hash.slice(1));
+  if (legacy.has('view')) return location.replace(`/view/${current(legacy.get('view')) ?? ''}`);
+  if (legacy.has('edit')) {
+    const [code, secret] = legacy.get('edit').split('.');
+    return location.replace(editLink(normalizeCode(code) ?? '', secret ?? ''));
   }
-  const view = normalizeCode(params.get('view'));
-  if (view) return viewerPage(view);
+
+  const [, page, rawCode] = location.pathname.split('/');
+  const code = normalizeCode(rawCode);
+  if (page === 'edit' && code && location.hash.length > 1) return editorPage(code, location.hash.slice(1));
+  if (page === 'view' && code) {
+    if (current(code) !== code) return location.replace(`/view/${current(code)}`);
+    return viewerPage(code);
+  }
+  if (location.pathname !== '/') return location.replace('/');
   homePage();
 }
 
-window.addEventListener('hashchange', () => location.reload());
 route();

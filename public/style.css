@@ -208,6 +208,8 @@ body[data-view="missing"] { background: var(--cream); color: var(--muted); }
   text-transform: uppercase;
 }
 .error { min-height: 1.2em; margin: 0; color: #a3303f; }
+.hint { margin: 0; font-size: .9rem; }
+.home > .primary { align-self: flex-start; }
 .privacy { margin: 0; font-size: .8rem; line-height: 1.4; opacity: .6; }
 
 /* Dashboard of followed rooms */

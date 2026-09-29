@@ -1,9 +1,13 @@
 // Sounds are generated in the browser and scheduled on the audio clock,
 // so countdowns stay on time even when the tab is in the background.
-export const NOISES = ['white', 'pink', 'brown'];
-const LEVELS = { white: 0.1, pink: 0.18, brown: 0.3 };
+export const NOISES = ['brown', 'pink', 'white'];
+const LEVELS = { brown: 0.14, pink: 0.05, white: 0.025 };
+const CUTOFFS = { brown: 500, pink: 2500, white: 3500 };
+const FADE_IN = 4;
+const FADE_OUT = 1.5;
 let ctx = null;
 let noiseGain = null;
+let noiseFilter = null;
 let noiseSource = null;
 let noiseType = null;
 let pending = [];
@@ -13,7 +17,9 @@ export async function ensure() {
     ctx = new AudioContext();
     noiseGain = ctx.createGain();
     noiseGain.gain.value = 0;
-    noiseGain.connect(ctx.destination);
+    noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseGain.connect(noiseFilter).connect(ctx.destination);
   }
   if (ctx.state !== 'running') await ctx.resume();
 }
@@ -48,6 +54,7 @@ function useNoise(type) {
   noiseSource = null;
   noiseType = type;
   if (!type) return;
+  noiseFilter.frequency.value = CUTOFFS[type];
   noiseSource = ctx.createBufferSource();
   noiseSource.buffer = noiseBuffer(type);
   noiseSource.loop = true;
@@ -55,7 +62,7 @@ function useNoise(type) {
   noiseSource.start();
 }
 
-function tone(at, frequency, duration, volume = 0.2) {
+function tone(at, frequency, duration, volume = 0.1) {
   const oscillator = ctx.createOscillator();
   const gain = ctx.createGain();
   oscillator.frequency.value = frequency;
@@ -91,13 +98,19 @@ export function schedule(plan, { noise }) {
   const at = (ms) => base + (ms - nowMs) / 1000;
   plan.forEach((phase, index) => {
     if (phase.end <= nowMs) return;
+    // Fade in even when joining mid-focus or after a resume, never start at full level.
     if (noise && phase.kind === 'focus') {
-      noiseGain.gain.setValueAtTime(LEVELS[noise], Math.max(base, at(phase.start)));
-      noiseGain.gain.setValueAtTime(0, at(phase.end));
+      const from = Math.max(base, at(phase.start));
+      const end = at(phase.end);
+      const fadeOut = Math.max(from, end - FADE_OUT);
+      noiseGain.gain.setValueAtTime(0, from);
+      noiseGain.gain.linearRampToValueAtTime(LEVELS[noise], Math.min(from + FADE_IN, fadeOut));
+      noiseGain.gain.setValueAtTime(LEVELS[noise], fadeOut);
+      noiseGain.gain.linearRampToValueAtTime(0, end);
     }
     for (let second = 5; second >= 1; second--) {
       const beepAt = phase.end - second * 1000;
-      if (beepAt > nowMs) tone(at(beepAt), 880, 0.12, 0.15);
+      if (beepAt > nowMs) tone(at(beepAt), 660, 0.1, 0.06);
     }
     const end = at(phase.end);
     if (index === plan.length - 1) {

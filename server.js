@@ -12,7 +12,7 @@ const HOUR = 3_600_000;
 const MAX_BODY = 4096;
 
 const store = createStore({ pinned: parsePinned(process.env.PINNED_ROOMS ?? '') });
-const creations = createRateLimiter({ max: 5, windowMs: HOUR });
+const creations = createRateLimiter({ max: 10, windowMs: HOUR });
 const restores = createRateLimiter({ max: 20, windowMs: HOUR });
 setInterval(() => {
   store.sweep();
@@ -109,7 +109,8 @@ function watch(res, codes) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = resolve(PUBLIC_DIR, `.${pathname === '/' ? '/index.html' : decodeURIComponent(pathname)}`);
+  const page = pathname === '/' || /^\/(view|edit)\/[^/]+$/.test(pathname);
+  const file = resolve(PUBLIC_DIR, `.${page ? '/index.html' : decodeURIComponent(pathname)}`);
   if (!file.startsWith(PUBLIC_DIR)) return json(res, 404, { error: 'not_found' });
   try {
     const body = await readFile(file);
@@ -136,7 +137,13 @@ async function handle(req, res) {
 
   if (pathname === '/api/rooms' && req.method === 'POST') {
     if (!creations.allow(clientIp(req))) return json(res, 429, { error: 'too_many' });
-    return json(res, 201, store.create());
+    const { code } = await readJson(req);
+    try {
+      return json(res, 201, store.create(code));
+    } catch (error) {
+      if (error.code === 'taken') return json(res, 409, { error: 'taken', suggestion: store.suggest(code) });
+      throw error;
+    }
   }
 
   const route = ROOM_ROUTE.exec(pathname);

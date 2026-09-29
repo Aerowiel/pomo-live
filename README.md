@@ -23,9 +23,9 @@ fly deploy --remote-only --ha=false
 ## Épingler un salon
 
 ```sh
-fly ssh console -C "node /app/scripts/new-room.js"   # affiche code, secret et hash
-fly secrets set PINNED_ROOMS="CODE:HASH"
+fly ssh console -C "node /app/scripts/new-room.js mon-code"   # affiche code, secret et hash
+fly secrets set PINNED_ROOMS="mon-code:HASH"
 ```
 
-Le lien éditeur est `https://pomo-live.fly.dev/#edit=CODE.SECRET` : c'est un mot de passe, ne pas le partager.
+Le lien viewer est `https://pomo-live.fly.dev/view/CODE`. Le lien éditeur est `https://pomo-live.fly.dev/edit/CODE#SECRET` : c'est un mot de passe, ne pas le partager.
 Pour le régénérer en cas de fuite, recommencer ces deux commandes.

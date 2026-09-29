@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCode, normalizeCode } from '../public/codes.js';
+import { normalizeCode } from '../public/codes.js';
 import { createStore, hashSecret, MAX_NAME, parsePinned } from '../lib/rooms.js';
 import { createRateLimiter } from '../lib/rate-limit.js';
 
@@ -14,13 +14,28 @@ function clock(t = Date.UTC(2026, 8, 29, 9)) {
   return now;
 }
 
-test('codes are normalized, validated and formatted', () => {
-  assert.equal(normalizeCode('k7f-2qm'), 'K7F2QM');
-  assert.equal(normalizeCode(' K7F 2QM '), 'K7F2QM');
-  assert.equal(normalizeCode('K7F-2QO'), null);
-  assert.equal(normalizeCode('K7F2Q'), null);
+test('codes are lowercase letters, digits and single hyphens, 3 to 24 long', () => {
+  assert.equal(normalizeCode(' FPendaries '), 'fpendaries');
+  assert.equal(normalizeCode('Jean Dupont'), 'jean-dupont');
+  assert.equal(normalizeCode('K93EDV'), 'k93edv');
+  assert.equal(normalizeCode('ab'), null);
+  assert.equal(normalizeCode('a'.repeat(25)), null);
+  assert.equal(normalizeCode('-abc'), null);
+  assert.equal(normalizeCode('ab--c'), null);
+  assert.equal(normalizeCode('é-été'), null);
   assert.equal(normalizeCode(null), null);
-  assert.equal(formatCode('K7F2QM'), 'K7F-2QM');
+});
+
+test('a creator can pick a code, and gets a free variant when it is taken', () => {
+  const store = createStore({ now: clock() });
+  assert.equal(store.create('FPendaries').code, 'fpendaries');
+  assert.throws(() => store.create('fpendaries'), { code: 'taken' });
+  assert.throws(() => store.create('x'), { code: 'invalid' });
+  const variant = store.suggest('fpendaries');
+  assert.match(variant, /^fpendaries-[2-9a-hjkmnp-z]{3}$/);
+  assert.equal(store.create(variant).code, variant);
+  assert.equal(store.suggest('a'.repeat(24)).length, 24);
+  assert.match(store.create().code, /^[2-9a-hjkmnp-z]{6}$/);
 });
 
 test('only the editor secret can drive a room', () => {
@@ -30,7 +45,7 @@ test('only the editor secret can drive a room', () => {
   store.command(code, secret, { action: 'start', focusMin: 25, rounds: 4 });
   assert.equal(store.get(code).session.rounds, 4);
   assert.throws(() => store.command(code, 'wrong', { action: 'stop' }), { code: 'forbidden' });
-  assert.throws(() => store.command('ZZZZZZ', secret, { action: 'stop' }), { code: 'not_found' });
+  assert.throws(() => store.command('zzzzzz', secret, { action: 'stop' }), { code: 'not_found' });
   assert.throws(() => store.command(code, secret, { action: 'start', focusMin: 1, rounds: 1 }), { code: 'invalid' });
   assert.throws(() => store.command(code, secret, null), { code: 'invalid' });
 });
@@ -48,7 +63,7 @@ test('subscribers hear about every change', () => {
 });
 
 test('open rooms are capped, pinned rooms do not count', () => {
-  const store = createStore({ maxRooms: 2, pinned: [{ code: 'K7F2QM', hash: hashSecret(SECRET) }], now: clock() });
+  const store = createStore({ maxRooms: 2, pinned: [{ code: 'fpendaries', hash: hashSecret(SECRET) }], now: clock() });
   store.create();
   store.create();
   assert.throws(() => store.create(), { code: 'full' });
@@ -56,7 +71,7 @@ test('open rooms are capped, pinned rooms do not count', () => {
 
 test('rooms without a session for 30 days are deleted, pinned rooms stay', () => {
   const now = clock();
-  const store = createStore({ pinned: [{ code: 'K7F2QM', hash: hashSecret(SECRET) }], now });
+  const store = createStore({ pinned: [{ code: 'fpendaries', hash: hashSecret(SECRET) }], now });
   const old = store.create();
   now.t += 20 * DAY;
   const recent = store.create();
@@ -64,34 +79,34 @@ test('rooms without a session for 30 days are deleted, pinned rooms stay', () =>
   store.sweep();
   assert.equal(store.get(old.code), undefined);
   assert.ok(store.get(recent.code));
-  assert.ok(store.get('K7F2QM'));
+  assert.ok(store.get('fpendaries'));
 });
 
 test('an editor recreates its forgotten room, and nobody else can claim it', () => {
   const now = clock();
   const store = createStore({ now });
-  store.restore('K7F2QM', SECRET, null);
-  assert.ok(store.get('K7F2QM'));
-  assert.throws(() => store.restore('K7F2QM', 'another-long-enough-secret', null), { code: 'taken' });
-  assert.throws(() => store.restore('ABCDEF', 'short', null), { code: 'invalid' });
+  store.restore('fpendaries', SECRET, null);
+  assert.ok(store.get('fpendaries'));
+  assert.throws(() => store.restore('fpendaries', 'another-long-enough-secret', null), { code: 'taken' });
+  assert.throws(() => store.restore('abcdef', 'short', null), { code: 'invalid' });
 });
 
 test('a restored session fills an empty room but never overrides a running one', () => {
   const now = clock();
-  const store = createStore({ pinned: [{ code: 'K7F2QM', hash: hashSecret(SECRET) }], now });
+  const store = createStore({ pinned: [{ code: 'fpendaries', hash: hashSecret(SECRET) }], now });
   const session = { focusMin: 25, rounds: 2, startedAt: now.t - 5 * MIN, pausedAt: null, pausedMs: 0 };
-  store.restore('K7F2QM', SECRET, { ...session, extra: 'dropped' });
-  assert.deepEqual(store.get('K7F2QM').session, session);
-  store.restore('K7F2QM', SECRET, { ...session, rounds: 4 });
-  assert.equal(store.get('K7F2QM').session.rounds, 2);
+  store.restore('fpendaries', SECRET, { ...session, extra: 'dropped' });
+  assert.deepEqual(store.get('fpendaries').session, session);
+  store.restore('fpendaries', SECRET, { ...session, rounds: 4 });
+  assert.equal(store.get('fpendaries').session.rounds, 2);
 });
 
 test('absurd restored sessions are rejected', () => {
   const now = clock();
   const store = createStore({ now });
   const future = { focusMin: 25, rounds: 2, startedAt: now.t + DAY, pausedAt: null, pausedMs: 0 };
-  assert.throws(() => store.restore('K7F2QM', SECRET, future), { code: 'invalid' });
-  assert.throws(() => store.restore('K7F2QM', SECRET, 'nope'), { code: 'invalid' });
+  assert.throws(() => store.restore('fpendaries', SECRET, future), { code: 'invalid' });
+  assert.throws(() => store.restore('fpendaries', SECRET, 'nope'), { code: 'invalid' });
 });
 
 test('the creator names the room with plain, one-line, bounded text', () => {
@@ -106,18 +121,18 @@ test('the creator names the room with plain, one-line, bounded text', () => {
 });
 
 test('a restore brings the name back without overriding an existing one', () => {
-  const store = createStore({ pinned: [{ code: 'K7F2QM', hash: hashSecret(SECRET) }], now: clock() });
+  const store = createStore({ pinned: [{ code: 'fpendaries', hash: hashSecret(SECRET) }], now: clock() });
   const seen = [];
-  store.subscribe('K7F2QM', (room) => seen.push(room.name));
-  store.restore('K7F2QM', SECRET, null, 'Florian');
-  store.restore('K7F2QM', SECRET, null, 'Other');
-  assert.equal(store.get('K7F2QM').name, 'Florian');
+  store.subscribe('fpendaries', (room) => seen.push(room.name));
+  store.restore('fpendaries', SECRET, null, 'Florian');
+  store.restore('fpendaries', SECRET, null, 'Other');
+  assert.equal(store.get('fpendaries').name, 'Florian');
   assert.deepEqual(seen, ['Florian', 'Florian']);
 });
 
 test('pinned rooms are read from the environment', () => {
   const hash = 'a'.repeat(64);
-  assert.deepEqual(parsePinned(`k7f-2qm:${hash}`), [{ code: 'K7F2QM', hash }]);
+  assert.deepEqual(parsePinned(`FPendaries:${hash}`), [{ code: 'fpendaries', hash }]);
   assert.deepEqual(parsePinned(''), []);
   assert.throws(() => parsePinned('nope'));
 });
