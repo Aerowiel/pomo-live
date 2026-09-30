@@ -4,7 +4,7 @@
 export const MIN_FOCUS = 5;
 export const MAX_FOCUS = 180;
 export const MAX_ROUNDS = 12;
-export const INTRO_MS = 8_000;
+export const INTRO_MS = 7_000;
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 
