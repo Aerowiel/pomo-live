@@ -10,13 +10,6 @@ En ligne sur https://pomo-live.fly.dev.
 - Les salons sont en mémoire. Après un redémarrage, chaque appareil éditeur recrée son salon (`/restore`).
 - Les salons épinglés (`PINNED_ROOMS`, secret Fly) existent dès le démarrage et n'expirent jamais.
 
-## Sons
-
-`public/sounds/` vient d'un enregistrement open source fait par un ami et partagé pour ce projet : un tic,
-le carillon de reprise, le carillon de pause et une boucle de brown noise de 30 s (raccord en fondu).
-Chaque focus s'ouvre sur 4 tics et le carillon, puis le bruit monte ; il se ferme sur 7 tics pendant que
-le bruit baisse, puis le carillon de pause.
-
 ## Déployer
 
 Rien ne tourne en local : les tests s'exécutent dans le build Docker, et un test en échec bloque le déploiement.
