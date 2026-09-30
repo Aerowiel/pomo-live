@@ -3,7 +3,7 @@ import { INTRO_MS } from './timeline.js';
 export const NOISES = ['brown'];
 const FILES = ['tick', 'focus', 'break', 'brown'];
 // Bump when a file in public/sounds changes: browsers cache them for a week.
-const SOUNDS_VERSION = 2;
+const SOUNDS_VERSION = 3;
 const OPENING_TICKS = 4;
 const CLOSING_TICKS = 7;
 const OPENING_LENGTH = INTRO_MS / 1000;
