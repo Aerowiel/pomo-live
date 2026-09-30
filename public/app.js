@@ -432,7 +432,7 @@ function editorPage(code, secret) {
     });
     $('#start').addEventListener('click', async () => {
       saved.set('settings', settings);
-      await audio.ensure().catch(() => {});
+      audio.ensure().catch(() => {});
       send('start', settings);
     });
   }
@@ -477,7 +477,7 @@ function editorPage(code, secret) {
       $('#overlay').hidden = view.status !== 'paused';
       document.title = `${countdown(view.remaining)} ${inFocus ? 'focus' : 'break'} · pomo-live`;
     }
-    noiseButton.textContent = mode === 'run' && !audio.ready() ? 'tap to enable sound' : `noise: ${noise}`;
+    noiseButton.textContent = mode === 'run' && !audio.ready() ? 'tap to enable sound' : `brown noise: ${noise === 'off' ? 'off' : 'on'}`;
     syncAudio(view);
   }
 
@@ -487,6 +487,7 @@ function editorPage(code, secret) {
     send(session?.pausedAt == null ? 'pause' : 'resume');
   });
 
+  audio.preload().catch(() => {});
   update();
   setInterval(update, 250);
 }

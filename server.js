@@ -26,6 +26,7 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json',
+  '.wav': 'audio/wav',
 };
 const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
@@ -117,7 +118,7 @@ async function serveStatic(res, pathname) {
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': pathname.startsWith('/sounds/') ? 'public, max-age=604800' : 'no-cache',
     });
     res.end(body);
   } catch {
