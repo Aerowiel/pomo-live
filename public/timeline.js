@@ -4,6 +4,7 @@
 export const MIN_FOCUS = 5;
 export const MAX_FOCUS = 180;
 export const MAX_ROUNDS = 12;
+export const INTRO_MS = 8_000;
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 
@@ -55,6 +56,20 @@ export function isFinished(session, now) {
 export function derive(session, now) {
   if (isFinished(session, now)) return { status: 'free' };
   const list = phases(session);
+  if (session.pausedAt == null && now < session.startedAt) {
+    return {
+      status: 'intro',
+      phase: 'focus',
+      round: 1,
+      rounds: session.rounds,
+      focusMs: session.focusMin * MINUTE,
+      breakMs: breakMinutes(session.focusMin) * MINUTE,
+      phaseMs: INTRO_MS,
+      remaining: session.startedAt - now,
+      phaseEndsAt: session.startedAt,
+      sessionEndsAt: session.startedAt + list.at(-1).end,
+    };
+  }
   const elapsed = activeElapsed(session, now);
   const current = list.find((phase) => elapsed < phase.end);
   const remaining = current.end - elapsed;
@@ -81,9 +96,9 @@ export function applyCommand(session, command, now) {
   switch (command.action) {
     case 'start':
       if (!isValidSettings(command.focusMin, command.rounds)) throw new RangeError('invalid settings');
-      return { focusMin: command.focusMin, rounds: command.rounds, startedAt: now, pausedAt: null, pausedMs: 0 };
+      return { focusMin: command.focusMin, rounds: command.rounds, startedAt: now + INTRO_MS, pausedAt: null, pausedMs: 0 };
     case 'pause':
-      return running && session.pausedAt == null ? { ...session, pausedAt: now } : session;
+      return running && session.pausedAt == null && now >= session.startedAt ? { ...session, pausedAt: now } : session;
     case 'resume':
       return running && session.pausedAt != null
         ? { ...session, pausedAt: null, pausedMs: session.pausedMs + (now - session.pausedAt) }

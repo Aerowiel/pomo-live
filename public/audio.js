@@ -1,8 +1,10 @@
+import { INTRO_MS } from './timeline.js';
+
 export const NOISES = ['brown'];
 const FILES = ['tick', 'focus', 'break', 'brown'];
 const OPENING_TICKS = 4;
 const CLOSING_TICKS = 7;
-const OPENING_LENGTH = 8;
+const OPENING_LENGTH = INTRO_MS / 1000;
 const FADE_IN = 1.5;
 const LATE_TOLERANCE = 0.5;
 let ctx = null;
@@ -90,11 +92,13 @@ export function schedule(plan, { noise }) {
     if (phase.kind !== 'focus' || phase.end <= nowMs) continue;
     const start = at(phase.start);
     const end = at(phase.end);
-    for (let i = 0; i < OPENING_TICKS; i++) play('tick', start + i);
-    play('focus', start + OPENING_TICKS);
+    // The opening cue ends as the focus starts: during the intro, then during the end of each break.
+    const cue = start - OPENING_LENGTH;
+    for (let i = 0; i < OPENING_TICKS; i++) play('tick', cue + i);
+    play('focus', cue + OPENING_TICKS);
 
     const fadeOut = end - CLOSING_TICKS;
-    const from = Math.max(base, start + OPENING_LENGTH);
+    const from = Math.max(base, start);
     if (noise && from < fadeOut) {
       gain.setValueAtTime(0, from);
       gain.linearRampToValueAtTime(1, Math.min(from + FADE_IN, fadeOut));

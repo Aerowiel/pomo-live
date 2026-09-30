@@ -64,6 +64,15 @@ function describe(session, missing) {
   if (missing) return { view: 'missing', status: 'NOT FOUND', next: '', rel: '', meta: '' };
   if (view.status === 'free') return { view: 'free', status: session === undefined ? '…' : 'FREE', next: '', rel: '', meta: '' };
   const round = `round ${view.round}/${view.rounds}`;
+  if (view.status === 'intro') {
+    return {
+      view: 'focus',
+      status: 'STARTING',
+      next: `focus at ${clockTime(view.phaseEndsAt)}`,
+      rel: `(in ${Math.ceil(view.remaining / 1000)} s)`,
+      meta: `${round} · ends at ${clockTime(view.sessionEndsAt)}`,
+    };
+  }
   if (view.status === 'paused') return { view: 'paused', status: 'PAUSED', next: `since ${clockTime(view.pausedAt)}`, rel: '', meta: round };
   const inFocus = view.status === 'focus';
   const lastFocus = inFocus && view.round === view.rounds;
@@ -482,9 +491,10 @@ function editorPage(code, secret) {
       breakHalf.classList.toggle('active', !inFocus);
       $('#focusTime').textContent = countdown(inFocus ? view.remaining : view.focusMs);
       $('#breakTime').textContent = countdown(inFocus ? view.breakMs : view.remaining);
-      setRing(focusHalf, inFocus ? view.remaining / view.phaseMs : 1);
+      const intro = view.status === 'intro';
+      setRing(focusHalf, inFocus && !intro ? view.remaining / view.phaseMs : 1);
       setRing(breakHalf, inFocus ? 1 : view.remaining / view.phaseMs);
-      $('#roundLabel').textContent = `ROUND ${view.round} / ${view.rounds}`;
+      $('#roundLabel').textContent = intro ? `GET READY · ROUND 1 / ${view.rounds}` : `ROUND ${view.round} / ${view.rounds}`;
       $('#overlay').hidden = view.status !== 'paused';
       document.title = `${countdown(view.remaining)} ${inFocus ? 'focus' : 'break'} · pomo-live`;
     }

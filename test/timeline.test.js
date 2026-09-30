@@ -1,9 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCommand, breakMinutes, derive, phases } from '../public/timeline.js';
+import { applyCommand, breakMinutes, derive, INTRO_MS, phases } from '../public/timeline.js';
 
 const MIN = 60_000;
-const start = (focusMin, rounds, now = 0) => applyCommand(null, { action: 'start', focusMin, rounds }, now);
+// Started INTRO_MS early: the first focus begins at t = 0.
+const start = (focusMin, rounds) => applyCommand(null, { action: 'start', focusMin, rounds }, -INTRO_MS);
+
+test('the focus only starts once the opening cue is over', () => {
+  const session = start(25, 2);
+  const intro = derive(session, -3_000);
+  assert.equal(intro.status, 'intro');
+  assert.equal(intro.remaining, 3_000);
+  assert.equal(intro.phaseEndsAt, 0);
+  assert.equal(intro.sessionEndsAt, 55 * MIN);
+  assert.equal(derive(session, 0).status, 'focus');
+  assert.equal(derive(session, 0).remaining, 25 * MIN);
+});
+
+test('the intro cannot be paused, only stopped', () => {
+  const session = start(25, 2);
+  assert.equal(applyCommand(session, { action: 'pause' }, -2_000), session);
+  assert.equal(applyCommand(session, { action: 'stop' }, -2_000), null);
+});
 
 test('the break is a fifth of the focus, rounded, and at least one minute', () => {
   assert.equal(breakMinutes(25), 5);
