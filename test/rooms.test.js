@@ -130,6 +130,21 @@ test('a restore brings the name back without overriding an existing one', () => 
   assert.deepEqual(seen, ['Florian', 'Florian']);
 });
 
+test('watchers are counted per device, and each release counts once', () => {
+  const store = createStore({ now: clock() });
+  const { code } = store.create();
+  const phone = store.watch(code, 'device-phone');
+  const secondTab = store.watch(code, 'device-phone');
+  const laptop = store.watch(code, 'device-laptop');
+  assert.equal(store.watcherCount(code), 2);
+  secondTab();
+  secondTab();
+  assert.equal(store.watcherCount(code), 2);
+  phone();
+  laptop();
+  assert.equal(store.watcherCount(code), 0);
+});
+
 test('pinned rooms are read from the environment', () => {
   const hash = 'a'.repeat(64);
   assert.deepEqual(parsePinned(`FPendaries:${hash}`), [{ code: 'fpendaries', hash }]);

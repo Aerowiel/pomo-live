@@ -91,6 +91,8 @@ a { color: inherit; }
 }
 .room-name:focus { outline: none; border-bottom-style: solid; }
 .room-code { opacity: .65; }
+.watchers { font-size: .8rem; letter-spacing: .05em; }
+.watchers.none { opacity: .35; }
 .center {
   position: absolute;
   top: 1rem;

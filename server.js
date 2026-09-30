@@ -42,7 +42,14 @@ function json(res, status, body) {
 }
 
 const MAX_WATCHED = 20;
-const roomState = (room) => ({ name: room.name, session: room.session, serverNow: Date.now() });
+const roomState = (room) => ({
+  name: room.name,
+  session: room.session,
+  watchers: store.watcherCount(room.code),
+  serverNow: Date.now(),
+});
+// A random id each browser keeps for itself; the editor connects without one and is not counted.
+const viewerId = (searchParams) => /^[\w-]{8,64}$/.exec(searchParams.get('viewer') ?? '')?.[0] ?? null;
 const clientIp = (req) => req.headers['fly-client-ip'] ?? req.socket.remoteAddress ?? 'unknown';
 const bearer = (req) => /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
 
@@ -62,7 +69,7 @@ async function readJson(req) {
 }
 
 // Server-Sent Events: the current state on connect, then every change, with a heartbeat for the proxy.
-function events(res, code) {
+function events(res, code, viewer) {
   const heartbeat = openStream(res);
   const send = (room) => {
     if (!room) {
@@ -74,9 +81,11 @@ function events(res, code) {
   };
   if (!send(store.get(code))) return clearInterval(heartbeat);
   const unsubscribe = store.subscribe(code, (room) => send(room) || stop());
+  const release = viewer ? store.watch(code, viewer) : () => {};
   function stop() {
     clearInterval(heartbeat);
     unsubscribe();
+    release();
   }
   res.on('close', stop);
 }
@@ -93,15 +102,16 @@ function openStream(res) {
 }
 
 // Unlike /events, a missing room does not end the stream: it may come back once its editor restores it.
-function watch(res, codes) {
+function watch(res, codes, viewer) {
   const heartbeat = openStream(res);
   const send = (code, room) => {
     const data = room ? { code, ...roomState(room) } : { code, missing: true, serverNow: Date.now() };
     res.write(`event: room\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  const unsubscribes = codes.map((code) => {
+  const unsubscribes = codes.flatMap((code) => {
     send(code, store.get(code));
-    return store.subscribe(code, (room) => send(code, room));
+    const unsubscribe = store.subscribe(code, (room) => send(code, room));
+    return viewer ? [unsubscribe, store.watch(code, viewer)] : [unsubscribe];
   });
   res.on('close', () => {
     clearInterval(heartbeat);
@@ -133,7 +143,7 @@ async function handle(req, res) {
   if (pathname === '/api/watch' && req.method === 'GET') {
     const codes = [...new Set((searchParams.get('codes') ?? '').split(',').map(normalizeCode).filter(Boolean))];
     if (codes.length === 0 || codes.length > MAX_WATCHED) return json(res, 400, { error: 'invalid' });
-    return watch(res, codes);
+    return watch(res, codes, viewerId(searchParams));
   }
 
   if (pathname === '/api/rooms' && req.method === 'POST') {
@@ -152,7 +162,7 @@ async function handle(req, res) {
     const code = normalizeCode(route[1]);
     const action = route[2];
     if (!code) return json(res, 404, { error: 'not_found' });
-    if (action === 'events' && req.method === 'GET') return events(res, code);
+    if (action === 'events' && req.method === 'GET') return events(res, code, viewerId(searchParams));
     if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
     const body = await readJson(req);
     if (action === 'command') return json(res, 200, roomState(store.command(code, bearer(req), body)));

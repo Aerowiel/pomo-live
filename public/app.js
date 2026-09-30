@@ -96,10 +96,19 @@ async function post(path, body = {}, secret) {
   return data;
 }
 
-function follow(code, { onState, onMissing }) {
+function viewerId() {
+  let id = saved.get('viewerId');
+  if (!id) {
+    id = crypto.randomUUID();
+    saved.set('viewerId', id);
+  }
+  return id;
+}
+
+function follow(code, { onState, onMissing, counted = false }) {
   let source;
   function open() {
-    source = new EventSource(`/api/rooms/${code}/events`);
+    source = new EventSource(`/api/rooms/${code}/events${counted ? `?viewer=${viewerId()}` : ''}`);
     source.addEventListener('state', (event) => {
       const data = JSON.parse(event.data);
       offset = data.serverNow - Date.now();
@@ -120,7 +129,7 @@ function follow(code, { onState, onMissing }) {
 }
 
 function watchRooms(codes, onRoom) {
-  const source = new EventSource(`/api/watch?codes=${codes.join(',')}`);
+  const source = new EventSource(`/api/watch?codes=${codes.join(',')}&viewer=${viewerId()}`);
   source.addEventListener('room', (event) => {
     const data = JSON.parse(event.data);
     offset = data.serverNow - Date.now();
@@ -314,6 +323,7 @@ function editorPage(code, secret) {
       <div class="pill share">
         <input class="room-name" id="roomName" maxlength="${MAX_NAME}" placeholder="name this room" aria-label="Room name" autocomplete="off">
         <span class="room-code">${code}</span>
+        <span class="watchers" id="watchers" title="People following this room right now"></span>
         <button id="copy"><small>copy viewer link</small></button>
       </div>
       <div class="pill center" id="center"></div>
@@ -355,6 +365,11 @@ function editorPage(code, secret) {
       name = data.name;
       saved.set(`name:${code}`, name);
       if (document.activeElement !== nameInput) nameInput.value = name;
+    }
+    if (Number.isInteger(data.watchers)) {
+      const watchers = $('#watchers');
+      watchers.textContent = `👁 ${data.watchers}`;
+      watchers.classList.toggle('none', data.watchers === 0);
     }
     update();
   }
@@ -531,6 +546,7 @@ function viewerPage(code) {
   let name = '';
   let missing = false;
   const connection = follow(code, {
+    counted: true,
     onState(data) {
       session = data.session;
       name = data.name;
