@@ -116,6 +116,9 @@ a { color: inherit; }
 .bottom-middle { left: 50%; bottom: 1.5rem; transform: translateX(-50%); }
 .bottom-middle .primary { padding: .9em 2.8em; font-size: 1.05rem; }
 .bottom-right { right: 1rem; }
+.sound-controls { display: flex; align-items: center; gap: .6rem; }
+.sound-controls input[type="range"] { width: 7rem; accent-color: var(--wine); opacity: .7; }
+.sound-controls input[type="range"]:hover, .sound-controls input[type="range"]:focus-visible { opacity: 1; }
 .round-button {
   display: grid;
   place-items: center;

@@ -314,7 +314,10 @@ function editorPage(code, secret) {
       </section>
       <div class="corner bottom-left" id="left"></div>
       <div class="corner bottom-middle" id="middle"></div>
-      <button class="pill corner bottom-right" id="noise"></button>
+      <div class="corner bottom-right sound-controls">
+        <input type="range" id="volume" min="0" max="1" step="0.05" aria-label="Volume">
+        <button class="pill" id="noise"></button>
+      </div>
       <div class="overlay" id="overlay" hidden>
         <p class="overlay-title">PAUSED</p>
         <div class="overlay-actions">
@@ -393,6 +396,14 @@ function editorPage(code, secret) {
     }
     update();
   });
+  const volumeInput = $('#volume');
+  volumeInput.value = saved.get('volume', 0.8);
+  audio.setVolume(Number(volumeInput.value));
+  volumeInput.addEventListener('input', () => {
+    audio.setVolume(Number(volumeInput.value));
+    saved.set('volume', Number(volumeInput.value));
+  });
+
   $('#resume').addEventListener('click', () => send('resume'));
   $('#stop').addEventListener('click', () => send('stop'));
 

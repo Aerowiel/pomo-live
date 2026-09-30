@@ -9,7 +9,15 @@ let ctx = null;
 let buffers = null;
 let loading = null;
 let noiseGain = null;
+let master = null;
+let volume = 1;
 let pending = [];
+
+// Squared so the slider feels even to the ear: half-way is a quarter of the power.
+export function setVolume(value) {
+  volume = value;
+  master?.gain.setTargetAtTime(value * value, ctx.currentTime, 0.05);
+}
 
 async function load() {
   const entries = await Promise.all(FILES.map(async (name) => {
@@ -19,7 +27,7 @@ async function load() {
   buffers = Object.fromEntries(entries);
   noiseGain = ctx.createGain();
   noiseGain.gain.value = 0;
-  noiseGain.connect(ctx.destination);
+  noiseGain.connect(master);
   const noise = ctx.createBufferSource();
   noise.buffer = buffers.brown;
   noise.loop = true;
@@ -29,7 +37,12 @@ async function load() {
 
 // Browsers allow decoding before a click, but playback only starts after one.
 export function preload() {
-  ctx ??= new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    master = ctx.createGain();
+    master.gain.value = volume * volume;
+    master.connect(ctx.destination);
+  }
   loading ??= load();
   return loading;
 }
@@ -46,7 +59,7 @@ function play(name, at) {
   if (at < ctx.currentTime - LATE_TOLERANCE) return;
   const source = ctx.createBufferSource();
   source.buffer = buffers[name];
-  source.connect(ctx.destination);
+  source.connect(master);
   source.start(Math.max(at, ctx.currentTime));
   pending.push(source);
 }
